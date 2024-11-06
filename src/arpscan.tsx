@@ -3,8 +3,10 @@ import { execa, ExecaError } from "execa";
 import { useEffect, useState } from "react";
 
 interface Preferences {
+  arpscanBinary: string;
   interfaceName: string;
 }
+
 const preferences: Preferences = getPreferenceValues<Preferences>();
 
 export interface Host {
@@ -12,36 +14,37 @@ export interface Host {
   ipAddress: string;
   macAddress: string;
   name: string;
-  rtt: string;
+  rtt: number;
   vendor: string;
 }
 
-export async function listHosts(interfaceName: string, netmasks: string[]): Promise<Host[]> {
+export async function listHosts(interfaceName: string): Promise<Host[]> {
   try {
     const commandArguments = [
-      "/opt/homebrew/bin/arp-scan",
+      preferences.arpscanBinary,
       `--interface=${interfaceName}`,
       "--resolve",
       "--rtt",
       "--plain",
       "--format=${ip}\\t${mac}\\t${name}\\t${rtt}\\t${vendor}",
-      ...netmasks,
+      "--localnet",
+      "--ignoredups",
     ];
-    console.log(commandArguments.join(" "));
-    console.log(commandArguments);
+
     const { stdout } = await execa("sudo", commandArguments);
-    let index = 0;
-    return stdout.split("\n").map((row) => {
-      const parts = row.split("\t");
-      return {
-        index: index++,
-        ipAddress: parts[0],
-        macAddress: parts[1],
-        hostName: parts[2],
-        rtt: parts[3],
-        vendor: parts[4],
-      };
-    });
+    return stdout
+      .split("\n")
+      .map((row) => {
+        const parts = row.split("\t");
+        return {
+          ipAddress: parts[0],
+          macAddress: parts[1],
+          name: parts[0] === parts[2] ? null : parts[2],
+          rtt: parts[3],
+          vendor: parts[4],
+        };
+      })
+      .sort(hostSorter);
   } catch (error) {
     console.log(error);
     if (error instanceof ExecaError) {
@@ -51,65 +54,41 @@ export async function listHosts(interfaceName: string, netmasks: string[]): Prom
   }
 }
 
-export async function getAddress(_interface: string): Promise<string[]> {
-  try {
-    const { stdout } = await execa("/sbin/ifconfig", [_interface]);
-
-    return stdout
-      .split("\n")
-      .filter((str) => str.includes("inet "))
-      .map((line) => line.replace("\t", "").split(" ")[5].replace(/.255$/, ".0") + "/24");
-  } catch (error) {
-    console.error(error); // true
-    if (error instanceof ExecaError) {
-      console.error(error.stderr); // true
-    }
-    return [];
-  }
-}
-
 const hostSorter = (a: Host, b: Host) => {
-  return (
-    Number(
-      a.ipAddress
+  const formatIp = (ipAddress: string) => {
+    return Number(
+      ipAddress
         .split(".")
         .map((num) => `000${num}`.slice(-3))
         .join(""),
-    ) -
-    Number(
-      b.ipAddress
-        .split(".")
-        .map((num) => `000${num}`.slice(-3))
-        .join(""),
-    )
-  );
+    );
+  };
+
+  return formatIp(a.ipAddress) - formatIp(b.ipAddress);
+};
+
+const formatNumber = (bytes, decimals) => {
+  if (bytes == 0) return "0";
+  const k = 1024,
+    dm = decimals || 2,
+    sizes = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"],
+    i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
 };
 
 export default function Command() {
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [netmasks, setNetmasks] = useState<string[]>([]);
-
-  useEffect(() => {
-    const fetchAndSetNetmask = async () => {
-      setNetmasks(await getAddress(preferences.interfaceName));
-    };
-    fetchAndSetNetmask().then();
-  }, []);
 
   useEffect(() => {
     const fetchAndSetHosts = async () => {
-      if (netmasks.length === 0) {
-        return;
-      }
       try {
-        const hosts1 = await listHosts(preferences.interfaceName, netmasks);
-        setHosts(hosts1.sort(hostSorter));
+        setHosts(await listHosts(preferences.interfaceName));
       } catch (error) {
         await showToast({ style: Toast.Style.Failure, title: String(error) });
       }
     };
     fetchAndSetHosts().then();
-  }, [netmasks]);
+  }, []);
 
   return (
     <List
@@ -122,7 +101,7 @@ export default function Command() {
       {hosts.length === 0 && <List.EmptyView title="arpscan is running" />}
       {hosts.map((host) => (
         <List.Item
-          key={`${host.macAddress}-${host.ipAddress}-${host.index}`}
+          key={`${host.macAddress}-${host.ipAddress}`}
           title={host.ipAddress}
           keywords={[host.name, host.ipAddress, host.macAddress, host.vendor].filter((value) => value)}
           accessories={[
@@ -133,7 +112,7 @@ export default function Command() {
               tag: host.vendor,
             },
             {
-              text: host.rtt,
+              text: formatNumber(host.rtt,2),
             },
             {
               text: host.macAddress,
