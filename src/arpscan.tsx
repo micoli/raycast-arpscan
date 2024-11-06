@@ -1,4 +1,14 @@
-import { List, showToast, Toast, getPreferenceValues, ActionPanel, Action, openCommandPreferences } from "@raycast/api";
+import {
+  List,
+  showToast,
+  Toast,
+  getPreferenceValues,
+  ActionPanel,
+  Action,
+  openCommandPreferences,
+  Clipboard,
+} from "@raycast/api";
+
 import { execa, ExecaError } from "execa";
 import { useEffect, useState } from "react";
 
@@ -78,11 +88,22 @@ const formatNumber = (bytes, decimals) => {
 
 export default function Command() {
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [filteredHosts, setFilteredHosts] = useState<Host[]>([]);
+  const [filter, setFilter] = useState<string>("");
+
+  const filterList = (_hosts: Host[], searchString: string) => {
+    setFilteredHosts(
+      _hosts.filter((host) =>
+        [host.name, host.ipAddress, host.macAddress, host.vendor].join(" ").toLocaleLowerCase().includes(searchString),
+      ),
+    );
+  };
 
   useEffect(() => {
     const fetchAndSetHosts = async () => {
       try {
-        setHosts(await listHosts(preferences.interfaceName));
+        const hosts1 = await listHosts(preferences.interfaceName);
+        setHosts(hosts1);
       } catch (error) {
         await showToast({ style: Toast.Style.Failure, title: String(error) });
       }
@@ -90,16 +111,22 @@ export default function Command() {
     fetchAndSetHosts().then();
   }, []);
 
+  useEffect(() => {
+    filterList(hosts, filter.toLocaleLowerCase());
+  }, [filter, hosts]);
+
   return (
     <List
+      onSearchTextChange={setFilter}
+      searchBarPlaceholder="Search on results"
       actions={
         <ActionPanel>
           <Action title="Open Extension Preferences" onAction={openCommandPreferences} />
         </ActionPanel>
       }
     >
-      {hosts.length === 0 && <List.EmptyView title="arpscan is running" />}
-      {hosts.map((host) => (
+      {filteredHosts.length === 0 && <List.EmptyView title="arpscan is running" />}
+      {filteredHosts.map((host) => (
         <List.Item
           key={`${host.macAddress}-${host.ipAddress}`}
           title={host.ipAddress}
@@ -112,12 +139,20 @@ export default function Command() {
               tag: host.vendor,
             },
             {
-              text: formatNumber(host.rtt,2),
+              text: formatNumber(host.rtt, 2),
             },
             {
               text: host.macAddress,
             },
           ]}
+          actions={
+            <ActionPanel>
+              <Action title="Copy Ip Address" onAction={() => Clipboard.copy(host.ipAddress)} />
+              <Action title="Copy Mac Address" onAction={() => Clipboard.copy(host.macAddress)} />
+              <Action title="Copy Vendor" onAction={() => Clipboard.copy(host.vendor)} />
+              <Action title="Open Extension Preferences" onAction={openCommandPreferences} />
+            </ActionPanel>
+          }
         />
       ))}
     </List>
